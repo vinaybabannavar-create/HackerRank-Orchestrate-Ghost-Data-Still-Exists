@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Local cache & traces
+code/cache/
+code/trace/
+code/scratch/
+test_unzip_eval/
+
+# Environment secrets
+.env
+*.env
+!.env.example
+
+# Temporary / OS
+.DS_Store
+Thumbs.db
+output_prev.csv
+test.txt
