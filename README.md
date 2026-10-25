@@ -45,15 +45,17 @@
 
 ## 📌 Overview & The Core Problem
 
-In enterprise microservices and distributed commerce platforms (modeled here after the fictional **Northstar Shop**), workflow orchestrators frequently report:
+In enterprise microservices and distributed commerce platforms (modeled here after the fictional **Northstar Shop**), workflow orchestrators frequently claim:
 
-$$\text{reported\_status} = \mathbf{COMPLETE} \quad \text{and} \quad \text{worker\_activity} = \mathbf{SUCCESS}$$
+```text
+reported_status = COMPLETE    and    worker_activity = SUCCESS
+```
 
 ...yet the subject's personally identifiable information (PII) remains stranded in secondary read replicas, un-purged search index shards, unredacted customer support transcripts, object storage attachments, and analytics warehouses. Even worse, active synchronization connectors (`integration_service`) and restorable backup snapshots (`backup_service`) can silently recreate records moments after deletion.
 
 > [!IMPORTANT]
 > **Core Architectural Invariant:**
-> **Claims are not proof.** The agent never trusts reported workflow flags or activity claims. True system state is established exclusively from concrete evidence (SQL dumps, NDJSON streams, KV traces, PDF tickets, and screenshot OCR) captured $\le \text{audit\_at}$. When a claim and the evidence disagree, **the evidence always wins**.
+> **Claims are not proof.** The agent never trusts reported workflow flags or activity claims. True system state is established exclusively from concrete evidence (SQL dumps, NDJSON streams, KV traces, PDF tickets, and screenshot OCR) captured at or before `audit_at` (`captured_at <= audit_at`). When a claim and the evidence disagree, **the evidence always wins**.
 
 ---
 
@@ -107,9 +109,9 @@ flowchart TD
 
 1. **Multilingual Intent Classifier:** Identifies whether the customer authorized account deletion. Cross-checks the `CLASSIFY_REQUEST` intake activity with multilingual keywords across English, French, Spanish, Japanese, and Korean. DSAR access inquiries, profile edits, billing copies, and marketing opt-outs produce `NOT_APPLICABLE` with `steps_json = []`.
 2. **Point-in-Time Identity Graph Resolver:** Resolves current and historical emails, phone numbers, and SHA-256 email hashes associated with the subject's stable `user_id` strictly as of `audit_at` (`user_identities.csv`, `user_audit_log.csv`). Any identity mutations after `audit_at` are ignored.
-3. **Multi-Store Evidence Scanner:** Point-in-time extraction across 94 evidence files captured $\le \text{audit\_at}$.
+3. **Multi-Store Evidence Scanner:** Point-in-time extraction across 94 evidence files captured at or before `audit_at`.
 4. **Policy Predicate Engine:** Maps each resource against `deletion_rules.csv`, evaluating explicit operational conditions (not blind heuristics).
-5. **Topologically Safe Remediation Planner:** Enforces lifecycle phase grouping (`FINDING` $\to$ `REMEDIATION` $\to$ `VERIFICATION`) and ordering dependencies.
+5. **Topologically Safe Remediation Planner:** Enforces lifecycle phase grouping (`FINDING` &rarr; `REMEDIATION` &rarr; `VERIFICATION`) and ordering dependencies.
 6. **Output Validator:** Asserts consecutive step numbering from `1`, exact triples, empty future `evidence_id: ""`, and lexicographical sort.
 
 ---
@@ -136,43 +138,37 @@ Our engine implements the exact operational mappings mandated by `deletion_rules
 
 Through iterative engineering and rigorous validation against the ground-truth benchmark, six core challenges were identified and solved:
 
-```carousel
-### 1. Data Recreation Inversion
-<!-- slide -->
-#### Problem
-Deleting primary database rows before disabling upstream sync bridges caused immediate record recreation.
+<details open>
+<summary><strong>1. Data Recreation Inversion (Topological Ordering)</strong></summary>
 
-#### Engineering Fix
-Enforced topological dependency sorting in `policy.py`:
-1. `DISABLE_DATA_FLOW` (stops sync connectors)
-2. `BLOCK_RESTORE` (seals backup archives)
-3. `DELETE_RECORD` (erases downstream replicas before primaries)
-4. `REDACT_RECORD` & `ANONYMIZE_RECORD`
-<!-- slide -->
-### 2. Multi-Tenant Screenshot OCR
-<!-- slide -->
-#### Problem
-11 PNG console screenshots were unread. Initial OCR bound all screen emails to all resources, causing a false positive in Case 15.
+- **Problem:** Deleting primary database rows before disabling upstream sync bridges caused immediate record recreation.
+- **Engineering Fix:** Enforced topological dependency sorting in `policy.py`:
+  1. `DISABLE_DATA_FLOW` (stops sync connectors)
+  2. `BLOCK_RESTORE` (seals backup archives)
+  3. `DELETE_RECORD` (erases downstream replicas before primaries)
+  4. `REDACT_RECORD` & `ANONYMIZE_RECORD`
+</details>
 
-#### Engineering Fix
-Added local ONNX OCR (`rapidocr-onnxruntime`) with line-proximity bounding: each resource ID binds strictly to the nearest inline identifier ($\pm 4$ lines). Case 15 passed 100%.
-<!-- slide -->
-### 3. Concurrent Batch Disambiguation
-<!-- slide -->
-#### Problem
-Concurrent deletion workers in 60-minute windows (Cases 28/29 & 31/32) had identical reported timestamps.
+<details open>
+<summary><strong>2. Multi-Tenant Screenshot OCR (Line-Proximity Bounding)</strong></summary>
 
-#### Engineering Fix
-Reconstructed the worker execution queue from `system_activity.csv`. Correlated worker outcomes with workflow statuses and recorded `tie_detected: True` in the trace.
-<!-- slide -->
-### 4. Zero Samples for NOT_APPLICABLE
-<!-- slide -->
-#### Problem
-Public sample cases contained 0 non-deletion requests, creating an overfitting vulnerability on the hidden 518 cases.
+- **Problem:** 11 PNG console screenshots were unread. Initial OCR bound all screen emails to all resources, causing a false positive in Case 15.
+- **Engineering Fix:** Added local ONNX OCR (`rapidocr-onnxruntime`) with line-proximity bounding: each resource ID binds strictly to the nearest inline identifier (&plusmn;4 lines). Case 15 passed 100%.
+</details>
 
-#### Engineering Fix
-Engineered a multilingual intent classifier cross-referencing `CLASSIFY_REQUEST` intake activities with keyword rules across 5 languages, correctly isolating 10 DSAR cases.
-```
+<details open>
+<summary><strong>3. Concurrent Batch Disambiguation</strong></summary>
+
+- **Problem:** Concurrent deletion workers in 60-minute windows (Cases 28/29 & 31/32) had identical reported timestamps.
+- **Engineering Fix:** Reconstructed the worker execution queue from `system_activity.csv`. Correlated worker outcomes with workflow statuses and recorded `tie_detected: True` in the trace.
+</details>
+
+<details open>
+<summary><strong>4. Zero Samples for NOT_APPLICABLE (Multilingual Intent)</strong></summary>
+
+- **Problem:** Public sample cases contained 0 non-deletion requests, creating an overfitting vulnerability on the hidden 518 cases.
+- **Engineering Fix:** Engineered a multilingual intent classifier cross-referencing `CLASSIFY_REQUEST` intake activities with keyword rules across 5 languages, correctly isolating 10 DSAR cases.
+</details>
 
 ---
 
@@ -252,7 +248,7 @@ py code/evaluation/generate_reports.py
 
 | Grading Category | Target Weight | System Implementation & Verification |
 |---|---|---|
-| **Output CSV** | **30 Points** | Exactly 518 data rows matching schema `case_id,deletion_status,steps_json`, sorted by `case_id`, consecutively numbered steps, valid phase-operation triples, and strict temporal cutoffs ($\le \text{audit\_at}$). |
+| **Output CSV** | **30 Points** | Exactly 518 data rows matching schema `case_id,deletion_status,steps_json`, sorted by `case_id`, consecutively numbered steps, valid phase-operation triples, and strict temporal cutoffs (`captured_at <= audit_at`). |
 | **Code ZIP** | **30 Points** | Self-contained, runnable 29-file archive containing full source, requirements, evaluation reports, and reference prompts (zero caches or dataset files). |
 | **AI Judge Interview** | **30 Points** | Complete architectural mastery guide covering topological ordering, grounded fact verification, multi-tenant OCR disambiguation, and failure analysis. |
 | **Chat Transcript** | **10 Points** | Root [`log.txt`](log.txt) strictly complies with AGENTS.md §5 (complete turn-by-turn history, exact `tool=Antigravity` and `model=gemini-3.8-flash` headers). |
